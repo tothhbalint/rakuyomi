@@ -14,11 +14,15 @@ Here's a recommended starter configuration that you can customize or use as-is:
 {
   "$schema": "https://github.com/hanatsumi/rakuyomi/releases/download/main/settings.schema.json",
   "source_lists": [
-    "https://raw.githubusercontent.com/Skittyblock/aidoku-community-sources/refs/heads/gh-pages/index.min.json"
+    "https://aidoku-community.github.io/sources/index.min.json",
+    "https://smexhy.github.io/yomu-aidoku-sources/index.min.json"
   ],
   "languages": ["en"]
 }
 ```
+
+If you leave out `source_lists` entirely, rakuyomi uses these two lists
+automatically. Set it to `[]` if you want to configure source lists yourself.
 
 ## Copying the Plugin to Your Device
 

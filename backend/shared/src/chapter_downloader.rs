@@ -132,7 +132,10 @@ where
                 anyhow::Ok((filename, response_bytes))
             }
         })
-        .buffer_unordered(CONCURRENT_REQUESTS)
+        // `buffered` (unlike `buffer_unordered`) yields results in input order,
+        // which keeps the pages sorted inside the CBZ even though downloads
+        // happen concurrently.
+        .buffered(CONCURRENT_REQUESTS)
         .try_collect::<Vec<_>>()
         .await?
         .into_iter()

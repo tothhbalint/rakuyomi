@@ -64,7 +64,8 @@ class KOReaderDriver:
         # Write settings file
         settings = {
             "source_lists": [
-                "https://raw.githubusercontent.com/Skittyblock/aidoku-community-sources/refs/heads/gh-pages/index.min.json",
+                "https://aidoku-community.github.io/sources/index.min.json",
+                "https://smexhy.github.io/yomu-aidoku-sources/index.min.json",
             ],
             "languages": ["en"],
             "storage_size_limit": "2GB",

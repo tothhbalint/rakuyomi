@@ -56,6 +56,17 @@ runtime. Legacy sources still work and were tested with a legacy MangaDemon
 
 Other changes:
 
+- Chapter downloads now use `buffered` instead of `buffer_unordered`, so pages
+  are written to the CBZ in reading order even though downloads run
+  concurrently. Before this fix pages could be shuffled depending on which
+  request finished first.
+- `Settings::source_lists` defaults to the current community list plus the Yomu
+  list when the field is omitted from `settings.json`. An explicit empty array
+  still disables source lists. If `settings.json` does not exist at all, the
+  server now creates it with these defaults, so a freshly copied plugin starts
+  without manual setup.
+- The result buffer reader now subtracts the 8-byte Aidoku header from the
+  encoded length instead of reading `len` bytes from the payload.
 - `SourceInfo` now accepts `languages: Vec<String>` and optional `lang`.
 - Global `languages` setting is exposed to sources as the `languages` default.
   If unset, the source's first declared language is used (English preferred).
@@ -129,7 +140,10 @@ With a server home containing both source lists:
 - `/mangas?q=death note` returned Kagane results.
 - Add-to-library, refresh-chapters (108 chapters), list chapters, and download
   chapter all worked.
-- The downloaded CBZ contains `0000.webp` ... with correct dimensions.
+- The downloaded CBZ contains `0000.webp` ... `0046.webp` in order (47 pages,
+  27.9 MB) with correct dimensions.
+- A `settings.json` with no `source_lists` field also returned all 149 sources,
+  proving the new built-in default lists work.
 
 ## KOReader checks
 
@@ -149,45 +163,73 @@ With a server home containing both source lists:
 ## Known missing pieces / next steps
 
 1. **Finish e2e verification** with the current KOReader. The e2e Python setup
-   still references the old KOReader package and old source list. Update:
-   - `e2e-tests/tests/koreader_driver.py` source list.
-   - `e2e-tests` launch command (`dev`/nix) for the current environment.
+   now uses the current source lists, but the launch path was not exercised in
+   this environment:
+   - `e2e-tests` still launches through the devenv `dev` command.
    - `packages/koreader.nix` still pins KOReader 2024.11.
-2. **Docs** (`docs/src/user-guide/installation/installing-to-your-device.md`)
-   still shows the old Skittyblock source list. Add the current community list
-   and optionally the Yomu list.
-3. **Consider making current source lists the default** in `Settings` when
-   `source_lists` is absent. Currently the user must add them manually.
-4. **Dynamic settings** (`get_settings` export) are not parsed. Sources with no
+2. **Dynamic settings** (`get_settings` export) are not parsed. Sources with no
    `settings.json` but dynamic settings may lack defaults. MangaFire was fixed
    via the global `languages` default, but a general `get_settings` decoder is a
    good follow-up.
-5. **Filters/listings/home** are not surfaced in the UI. Search works; source
+3. **Filters/listings/home** are not surfaced in the UI. Search works; source
    filters and home listings are ignored.
-6. **Canvas / page-image processing** is stubbed. `process_page_image` sources
+4. **Canvas / page-image processing** is stubbed. `process_page_image` sources
    (e.g. Mangago) may fail for protected pages. Comix also needs this.
-7. **HTML DOM mutation** (`set_attr`, `set_text`, etc.) is unimplemented, same as
+5. **HTML DOM mutation** (`set_attr`, `set_text`, etc.) is unimplemented, same as
    the reference aidoku-rs test runner.
-8. **Kindle hardfloat release build**: not built yet. Zig 0.17 was installed via
-   Homebrew to enable cross-compilation. Suggested:
-   ```sh
-   rustup target add arm-unknown-linux-musleabihf
-   # Create wrappers:
-   #   /tmp/zig-cc-armhf:  zig cc -target arm-linux-musleabihf "$@"
-   #   /tmp/zig-cxx-armhf: zig c++ -target arm-linux-musleabihf "$@"
-   export CC_arm_unknown_linux_musleabihf=/tmp/zig-cc-armhf
-   export CXX_arm_unknown_linux_musleabihf=/tmp/zig-cxx-armhf
-   export CARGO_TARGET_ARM_UNKNOWN_LINUX_MUSLEABIHF_LINKER=/tmp/zig-cc-armhf
-   cd backend
-   cargo build --release --target arm-unknown-linux-musleabihf \
-     -p server -p uds_http_request
-   ```
-   Then package `frontend/rakuyomi.koplugin`, the two binaries, and a
-   `BUILD_INFO.json` as `rakuyomi-kindlehf.zip`.
-   C dependencies to watch: bundled SQLite (`sqlx`) and rustls/ring.
-9. **Comix** cannot be fully supported without a webview. The Yomu source README
+6. **Some Yomu sources still fail on this environment.** Kagane and MangaDotNet
+   work end-to-end. Atsumaru returns `-1` from `get_page_list` (the source fails
+   to deserialize the synthetic `Manga` input), Mangaball reports a missing page
+   URL for some chapters, and OniSaga is behind a Cloudflare challenge. These do
+   not affect the Kagane Death Note path.
+7. **Comix** cannot be fully supported without a webview. The Yomu source README
    explicitly says Comix blocks third-party readers and uses a custom renderer
    for scrambled pages.
+
+## Kindle hardfloat build (done)
+
+The `arm-unknown-linux-musleabihf` build now works with Zig 0.17. Two details
+were required on Linux:
+
+- Zig 0.17 rejects the `--target=arm-unknown-linux-gnueabihf` flag that the
+  `cc` crate passes, so the wrapper scripts strip `--target`/`-target` and force
+  `-target arm-linux-musleabihf`.
+- Rust's self-contained CRT objects collide with Zig's own `crt1.o`, so the
+  build uses `-C link-self-contained=no`.
+
+```sh
+rustup target add arm-unknown-linux-musleabihf
+
+cat > /tmp/zig-cc-armhf <<'EOF'
+#!/usr/bin/env bash
+args=(); skip=0
+for arg in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$arg" in
+    --target=*) continue ;;
+    -target) skip=1; continue ;;
+  esac
+  args+=("$arg")
+done
+exec /tmp/zig/zig cc -target arm-linux-musleabihf "${args[@]}"
+EOF
+# Same for /tmp/zig-cxx-armhf with `zig c++`.
+
+export CC_arm_unknown_linux_musleabihf=/tmp/zig-cc-armhf
+export CXX_arm_unknown_linux_musleabihf=/tmp/zig-cxx-armhf
+export AR_arm_unknown_linux_musleabihf="/tmp/zig/zig ar"
+export CARGO_TARGET_ARM_UNKNOWN_LINUX_MUSLEABIHF_LINKER=/tmp/zig-cc-armhf
+export CARGO_TARGET_ARM_UNKNOWN_LINUX_MUSLEABIHF_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=no"
+
+cd backend
+cargo build --release --target arm-unknown-linux-musleabihf \
+  -p server -p uds_http_request
+```
+
+The resulting binaries are static ARM EABI5 hard-float executables. The packaged
+artifact is `build/rakuyomi-kindlehf.zip` (plugin Lua files plus `server`,
+`uds_http_request`, and `BUILD_INFO.json`); `build/rakuyomi.koplugin/` contains
+the unpacked folder. `build/` is gitignored.
 
 ## Warnings / cleanup
 

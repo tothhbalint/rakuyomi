@@ -28,11 +28,17 @@ pub enum ChapterSortingMode {
 }
 
 /// Settings used to configure rakuyomi's behavior.
-#[derive(Serialize, Deserialize, Default, Clone, Debug, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct Settings {
     /// A list of URLs containing Aidoku-compatible source lists, which will be available
     /// for installation from inside the plugin.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// When the setting is omitted entirely, the current community list and the
+    /// Yomu list are used. Set it to an empty array to disable source lists.
+    #[serde(
+        default = "default_source_lists",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub source_lists: Vec<Url>,
 
     /// If set, only chapters translated to those languages will be shown.
@@ -60,6 +66,37 @@ pub struct Settings {
     /// `volume_descending`.
     #[serde(default)]
     pub chapter_sorting_mode: ChapterSortingMode,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            source_lists: default_source_lists(),
+            languages: Vec::new(),
+            storage_size_limit: default_storage_size_limit(),
+            storage_path: None,
+            source_settings: HashMap::new(),
+            chapter_sorting_mode: ChapterSortingMode::default(),
+        }
+    }
+}
+
+/// Source lists used when `source_lists` is not present in `settings.json`.
+///
+/// These are the lists maintained by the Aidoku community and by Yomu. Both
+/// are needed in practice: the community list has the widest catalogue while
+/// the Yomu list carries sources that are not in the community list (and its
+/// Kagane source works well with rakuyomi).
+pub const DEFAULT_SOURCE_LISTS: [&str; 2] = [
+    "https://aidoku-community.github.io/sources/index.min.json",
+    "https://smexhy.github.io/yomu-aidoku-sources/index.min.json",
+];
+
+fn default_source_lists() -> Vec<Url> {
+    DEFAULT_SOURCE_LISTS
+        .iter()
+        .map(|url| Url::parse(url).expect("built-in source list URL must be valid"))
+        .collect()
 }
 
 fn default_storage_size_limit() -> StorageSizeLimit {
@@ -96,7 +133,7 @@ impl<'de> Deserialize<'de> for StorageSizeLimit {
 
         struct StorageSizeLimitVisitor;
 
-        impl<'de> Visitor<'de> for StorageSizeLimitVisitor {
+        impl Visitor<'_> for StorageSizeLimitVisitor {
             type Value = StorageSizeLimit;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

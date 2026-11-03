@@ -71,8 +71,24 @@ async fn main() -> anyhow::Result<()> {
     let database = Database::new(&database_path)
         .await
         .context("couldn't open database file")?;
-    let settings = Settings::from_file(&settings_path)
-        .with_context(|| format!("couldn't read settings file at {}", settings_path.display()))?;
+    let settings = if settings_path.exists() {
+        Settings::from_file(&settings_path).with_context(|| {
+            format!("couldn't read settings file at {}", settings_path.display())
+        })?
+    } else {
+        let settings = Settings::default();
+        settings.save_to_file(&settings_path).with_context(|| {
+            format!(
+                "couldn't create settings file at {}",
+                settings_path.display()
+            )
+        })?;
+        info!(
+            "created default settings file at {}",
+            settings_path.display()
+        );
+        settings
+    };
     let source_manager = SourceManager::from_folder(sources_path, settings.clone())
         .context("couldn't create source manager")?;
 

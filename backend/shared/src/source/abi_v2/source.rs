@@ -196,12 +196,15 @@ impl AbiV2Source {
             bail!("{}", String::from_utf8_lossy(&message));
         }
 
-        if len < 0 {
+        if len < 8 {
             self.free_result(pointer);
             bail!("source returned an invalid result length");
         }
 
-        let mut data = vec![0u8; len as usize];
+        // `aidoku::imports::std::encode` prefixes the postcard payload with an
+        // 8 byte header and stores the *total* length (header included), so the
+        // payload itself is `len - 8` bytes long.
+        let mut data = vec![0u8; (len - 8) as usize];
         memory
             .read(&self.store, pointer as usize + 8, &mut data)
             .context("failed to read source result")?;
