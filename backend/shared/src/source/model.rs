@@ -127,10 +127,14 @@ pub struct Chapter {
 pub struct Page {
     pub source_id: String,
     pub chapter_id: String,
+    pub manga_id: String,
     pub index: usize,
     pub image_url: Option<Url>,
     pub base64: Option<String>,
     pub text: Option<String>,
+    /// Extra context returned by newer sources. It is sent back to the source
+    /// when asking for image request headers.
+    pub context: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default)]

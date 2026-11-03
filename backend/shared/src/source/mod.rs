@@ -31,72 +31,124 @@ use self::{
     },
 };
 
+pub mod abi_v2;
 pub mod model;
 mod source_settings;
 mod wasm_imports;
 mod wasm_store;
 
+pub use abi_v2::AbiV2Source;
+
+/// The runtime backing a source. The current Aidoku source SDK (used by all
+/// sources updated for Aidoku 0.7+) is implemented in [`AbiV2Source`]. The
+/// original implementation is kept around so old `.aix` files continue to work.
+enum SourceRuntime {
+    Legacy(BlockingSource),
+    Modern(AbiV2Source),
+}
+
 #[derive(Clone)]
-pub struct Source(
+pub struct Source {
     /// In order to avoid issues when calling functions that block inside the `Source` from an
-    /// async context, we wrap all data and functions that need to block inside `BlockingSource`
+    /// async context, we wrap all data and functions that need to block inside a mutex
     /// and call them using `spawn_blocking` from within the facades exposed by `Source`.
     /// Particularly, all calls to `reqwest::blocking` methods from an async context causes the
     /// program to panic (see https://github.com/seanmonstar/reqwest/issues/1017), and we do call
     /// them inside the `net` module.
-    ///
-    /// This also provides interior mutability, but we probably could also do it inside the
-    /// `BlockingSource` itself, by placing things inside a mutex. It might be a cleaner design.
-    Arc<Mutex<BlockingSource>>,
-);
+    runtime: Arc<Mutex<SourceRuntime>>,
+    manifest: SourceManifest,
+    setting_definitions: Vec<SettingDefinition>,
+}
 
-macro_rules! wrap_blocking_source_fn {
+macro_rules! wrap_source_fn {
     ($fn_name:ident, $return_type:ty, $($param:ident : $type:ty),*) => {
         pub async fn $fn_name(&self, $($param: $type),*) -> $return_type {
-            let blocking_source = self.0.clone();
+            let runtime = self.runtime.clone();
 
-            ::tokio::task::spawn_blocking(move || blocking_source.lock().unwrap().$fn_name($($param),*)).await?
+            ::tokio::task::spawn_blocking(move || {
+                let mut runtime = runtime.lock().unwrap();
+                match &mut *runtime {
+                    SourceRuntime::Legacy(source) => source.$fn_name($($param),*),
+                    SourceRuntime::Modern(source) => source.$fn_name($($param),*),
+                }
+            })
+            .await?
         }
     };
 }
 
 impl Source {
     pub fn from_aix_file(path: &Path, settings: Settings) -> Result<Self> {
-        let blocking_source = BlockingSource::from_aix_file(path, settings)?;
+        // The current SDK uses a completely different ABI from the one used by
+        // older sources. Peek at the module exports to decide which runtime to use.
+        let (manifest, setting_definitions, runtime) = {
+            let file = fs::File::open(path)
+                .with_context(|| format!("couldn't open {}", path.display()))?;
+            let mut archive = ZipArchive::new(file)
+                .with_context(|| format!("couldn't open source archive {}", path.display()))?;
 
-        Ok(Self(Arc::new(Mutex::new(blocking_source))))
+            let wasm = {
+                let mut file = archive
+                    .by_name("Payload/main.wasm")
+                    .context("while loading main.wasm")?;
+                let mut bytes = Vec::with_capacity(file.size() as usize);
+                std::io::Read::read_to_end(&mut file, &mut bytes)?;
+                bytes
+            };
+
+            let engine = Engine::default();
+            match AbiV2Source::detect(&engine, &wasm)? {
+                abi_v2::source::AbiV2Detection::Modern => {
+                    let source = AbiV2Source::from_aix_file(path, settings)?;
+                    let manifest = source.manifest().clone();
+                    let definitions = source.setting_definitions().to_vec();
+                    (manifest, definitions, SourceRuntime::Modern(source))
+                }
+                abi_v2::source::AbiV2Detection::Legacy => {
+                    let source = BlockingSource::from_aix_file(path, settings)?;
+                    let manifest = source.manifest.clone();
+                    let definitions = source.setting_definitions.clone();
+                    (manifest, definitions, SourceRuntime::Legacy(source))
+                }
+            }
+        };
+
+        Ok(Self {
+            runtime: Arc::new(Mutex::new(runtime)),
+            manifest,
+            setting_definitions,
+        })
     }
 
     pub fn manifest(&self) -> SourceManifest {
-        // FIXME we dont actually need to clone here but yeah it's easier
-        self.0.lock().unwrap().manifest.clone()
+        self.manifest.clone()
     }
 
     pub fn setting_definitions(&self) -> Vec<SettingDefinition> {
-        self.0.lock().unwrap().setting_definitions.clone()
+        self.setting_definitions.clone()
     }
 
-    wrap_blocking_source_fn!(
+    wrap_source_fn!(
         get_manga_list,
         Result<Vec<Manga>>,
         cancellation_token: CancellationToken
     );
 
-    wrap_blocking_source_fn!(
+    wrap_source_fn!(
         search_mangas,
         Result<Vec<Manga>>,
         cancellation_token: CancellationToken,
         query: String
     );
 
-    wrap_blocking_source_fn!(
+    wrap_source_fn!(
         get_chapter_list,
         Result<Vec<Chapter>>,
         cancellation_token: CancellationToken,
         manga_id: String
     );
 
-    wrap_blocking_source_fn!(
+    wrap_source_fn!(
         get_page_list,
         Result<Vec<Page>>,
         cancellation_token: CancellationToken,
@@ -105,18 +157,32 @@ impl Source {
         chapter_num: Option<f64>
     );
 
-    wrap_blocking_source_fn!(
-        get_image_request,
-        Result<Request>,
-        url: Url
-    );
+    pub async fn get_image_request(
+        &self,
+        url: Url,
+        context: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<Request> {
+        let runtime = self.runtime.clone();
+
+        ::tokio::task::spawn_blocking(move || {
+            let mut runtime = runtime.lock().unwrap();
+            match &mut *runtime {
+                SourceRuntime::Legacy(source) => source.get_image_request(url),
+                SourceRuntime::Modern(source) => source.get_image_request(url, context),
+            }
+        })
+        .await?
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct SourceInfo {
     pub id: String,
-    pub lang: String,
+    #[serde(default)]
+    pub lang: Option<String>,
+    #[serde(default)]
+    pub languages: Vec<String>,
     pub name: String,
     pub version: usize,
 }

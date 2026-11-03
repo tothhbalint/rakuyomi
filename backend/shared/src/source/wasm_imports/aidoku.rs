@@ -212,10 +212,12 @@ pub fn create_page(
             OperationContextObject::Chapter { id, .. } => id.clone(),
             other => anyhow::bail!("unexpected `create_page` call under {:?} context", other),
         },
+        manga_id: String::new(),
         index: index as usize,
         image_url: image_url.and_then(|url| Url::parse(&url).ok()),
         base64,
         text,
+        context: None,
     };
 
     Ok(wasm_store.store_std_value(Value::Object(ObjectValue::Page(page)).into(), None) as i32)

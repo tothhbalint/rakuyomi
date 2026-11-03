@@ -86,13 +86,18 @@ function Testing:setupIPC()
   local AF_UNIX = 1
   local SOCK_STREAM = 1
 
-  ffi.cdef [[
+  -- Some KOReader versions already declare these through `ffi/posix_h`.
+  -- Redefining a struct is an error in current LuaJIT builds, so try and
+  -- ignore the failure if the declarations are already available.
+  pcall(ffi.cdef, [[
     struct sockaddr_un {
       unsigned short sun_family;
       char sun_path[108];
     };
+  ]])
+  pcall(ffi.cdef, [[
     int connect(int sockfd, const struct sockaddr *addr, unsigned int addrlen);
-  ]]
+  ]])
 
   self.socket_fd = C.socket(AF_UNIX, SOCK_STREAM, 0)
   if self.socket_fd < 0 then

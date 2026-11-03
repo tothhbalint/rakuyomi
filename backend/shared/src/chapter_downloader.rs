@@ -107,6 +107,7 @@ where
 
             async move {
                 let image_url = page.image_url.ok_or(anyhow!("page has no image URL"))?;
+                let context = page.context;
                 let extension = Path::new(image_url.path())
                     .extension()
                     .and_then(|ext| ext.to_str())
@@ -120,7 +121,7 @@ where
 
                 // TODO we could stream the data from the client into the file
                 // would save a bit of memory but i dont think its a big deal
-                let request = source.get_image_request(image_url).await?;
+                let request = source.get_image_request(image_url, context).await?;
                 let response_bytes = client
                     .execute(request)
                     .await?
